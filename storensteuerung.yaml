@@ -1,0 +1,106 @@
+blueprint:
+  name: Andis Storensteuerung
+  description: Die Steuerung verbindet Shelly RC Button 4 Fernsteuerungen mit Shelly 2PM Storensteuerung(en)
+  domain: automation
+  input:
+    input_zimmername:
+      name: Zimmername
+    remote_device:
+      name: Fernbedienung
+      description: Auswahl der Fernsteuerung
+      selector:
+        device:
+          filter:
+            - integration: bthome
+    cover_target:
+      name: Targets für Fernbedienung
+      description: >
+        Hier die Steuerungen auswählen, welche mit der Fernbedienung 
+        aktiviert werden sollen.
+      selector:
+        target:
+          entity:
+            device_class: shutter
+# Automatisierungsteil
+triggers:
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_1
+    subtype: press
+    trigger: device
+    id: storen-open
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_1
+    subtype: double_press
+    trigger: device
+    id: storen-stop
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_2
+    subtype: hold_press
+    trigger: device
+    id: storen-open
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_2
+    subtype: long_press
+    trigger: device
+    id: storen-stop-open
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_3
+    subtype: hold_press
+    trigger: device
+    id: storen-close
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_3
+    subtype: long_press
+    trigger: device
+    id: storen-stop-close
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_4
+    subtype: press
+    trigger: device
+    id: storen-close
+  - device_id: !input remote_device
+    domain: bthome
+    type: button_4
+    subtype: double_press
+    trigger: device
+    id: storen-stop
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - storen-open
+        sequence:
+          - action: cover.open_cover
+            metadata: {}
+            data: {}
+            target: !input cover_target
+      - conditions:
+          - condition: trigger
+            id:
+              - storen-stop
+              - storen-stop-open
+              - storen-stop-close
+        sequence:
+          - action: cover.stop_cover
+            metadata: {}
+            data: {}
+            target: !input cover_target
+      - conditions:
+          - condition: trigger
+            id:
+              - storen-close
+        sequence:
+          - action: cover.close_cover
+            metadata: {}
+            data: {}
+            target: !input cover_target
+mode: single

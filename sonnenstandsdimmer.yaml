@@ -1,0 +1,336 @@
+# yaml-language-server: $schema=none
+
+blueprint:
+  name: Präsenzsteuerung nach Sonnenhöhe und Helligkeit
+  description: >-
+    Schaltet abhängig von Präsenz, gemessener Helligkeit und Sonnenhöhe genau
+    eine Lampengruppe ein. Die Ausschaltverzögerung beginnt erst, wenn alle
+    Präsenzmelder frei sind. Helligkeit und Farbtemperatur werden beim
+    Einschalten berechnet; eine laufende Nachführung nach Sonnenhöhe erfolgt
+    bewusst nicht.
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    presence_sensors:
+      name: Präsenzmelder
+      description: >-
+        Einer oder mehrere Melder. Sobald einer davon aktiv ist, gilt Präsenz
+        als erkannt.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class: occupancy
+            - domain: binary_sensor
+              device_class: motion
+            - domain: binary_sensor
+              device_class: presence
+          multiple: true
+
+    illuminance_sensors:
+      name: Zugehörige Lichtmesser / Lux-Sensoren
+      description: >-
+        Das Licht wird nur neu eingeschaltet, wenn alle ausgewählten Sensoren
+        einen gültigen Messwert unterhalb des Grenzwerts liefern.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: illuminance
+          multiple: true
+
+    max_lux:
+      name: Maximaler Helligkeitswert
+      description: >-
+        Das Licht wird nur neu eingeschaltet, wenn alle Lux-Sensoren unter
+        diesem Wert liegen.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: lx
+          mode: box
+
+    min_elev:
+      name: Untere Elevation (Startpunkt)
+      description: Sonnenwinkel in Grad für den unteren Regelpunkt.
+      default: -5.0
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: 0.5
+          unit_of_measurement: "°"
+
+    max_elev:
+      name: Obere Elevation (Endpunkt)
+      description: >-
+        Sonnenwinkel in Grad für den oberen Regelpunkt. Muss größer als die
+        untere Elevation sein.
+      default: 10.0
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: 0.5
+          unit_of_measurement: "°"
+
+    min_bright:
+      name: Helligkeit an der unteren Elevation
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
+    max_bright:
+      name: Helligkeit an der oberen Elevation
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
+    presence_off_delay:
+      name: Ausschaltverzögerung
+      description: >-
+        Zeit, während der alle Präsenzmelder durchgehend frei sein müssen,
+        bevor die Lampen ausgeschaltet werden.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: slider
+
+    transition_time:
+      name: Übergangszeit
+      description: Dauer für Helligkeits- und Farbtemperaturänderungen.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: s
+          mode: slider
+
+    # Die IDs bleiben aus Kompatibilitätsgründen erhalten. Die Werte sind Kelvin,
+    # nicht Mired.
+    min_kelvin:
+      name: Farbtemperatur an der unteren Elevation
+      description: Farbtemperatur in Kelvin am unteren Regelpunkt.
+      default: 2200
+      selector:
+        number:
+          min: 2200
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+
+    max_kelvin:
+      name: Farbtemperatur an der oberen Elevation
+      description: Farbtemperatur in Kelvin am oberen Regelpunkt.
+      default: 3000
+      selector:
+        number:
+          min: 2200
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+
+    target_lights_below:
+      name: Lampen unterhalb der unteren Elevation
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: light
+          multiple: true
+
+    target_lights_between:
+      name: Lampen zwischen unterer und oberer Elevation
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: light
+          multiple: true
+
+    target_lights_above:
+      name: Lampen oberhalb der oberen Elevation
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: light
+          multiple: true
+
+mode: restart
+max_exceeded: silent
+
+# Blueprint-Eingaben müssen für Template-Trigger zuerst als Trigger-Variablen
+# verfügbar gemacht werden.
+trigger_variables:
+  trigger_presence_sensors: !input presence_sensors
+
+variables:
+  blueprint_inputs:
+    presence_sensors: !input presence_sensors
+    illuminance_sensors: !input illuminance_sensors
+    max_lux: !input max_lux
+    min_elev: !input min_elev
+    max_elev: !input max_elev
+    min_bright: !input min_bright
+    max_bright: !input max_bright
+    min_kelvin: !input min_kelvin
+    max_kelvin: !input max_kelvin
+    transition_time: !input transition_time
+    target_lights_below: !input target_lights_below
+    target_lights_between: !input target_lights_between
+    target_lights_above: !input target_lights_above
+
+triggers:
+  - trigger: state
+    entity_id: !input presence_sensors
+    to: "on"
+    id: presence_detected
+
+  # Ein gemeinsamer Template-Trigger verhindert, dass bei mehreren Meldern die
+  # Verzögerung bereits mit dem ersten inaktiven Melder beginnt.
+  - trigger: template
+    value_template: >-
+      {% set sensors = expand(trigger_presence_sensors) | list %}
+      {{ sensors | count > 0 and sensors | rejectattr('state', 'eq', 'off') | list | count == 0 }}
+    for:
+      seconds: !input presence_off_delay
+    id: presence_cleared
+
+  - trigger: numeric_state
+    entity_id: !input illuminance_sensors
+    below: !input max_lux
+    id: lux_became_low
+
+actions:
+  - variables:
+      managed_lights: >-
+        {{ (blueprint_inputs.target_lights_below
+            + blueprint_inputs.target_lights_between
+            + blueprint_inputs.target_lights_above) | unique | list }}
+
+  - choose:
+      # Alle Melder waren während der gesamten Verzögerung frei.
+      - conditions:
+          - condition: trigger
+            id: presence_cleared
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ managed_lights | count > 0 }}"
+            then:
+              - action: light.turn_off
+                target:
+                  entity_id: "{{ managed_lights }}"
+                data:
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
+
+      # Neue Präsenz oder der letzte Lux-Sensor fällt unter den Grenzwert.
+      - conditions:
+          - condition: trigger
+            id:
+              - presence_detected
+              - lux_became_low
+          - condition: template
+            value_template: >-
+              {{ expand(blueprint_inputs.presence_sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}
+          - condition: template
+            value_template: >-
+              {{ is_number(state_attr('sun.sun', 'elevation')) }}
+          - condition: template
+            value_template: >-
+              {{ blueprint_inputs.max_elev | float(0) > blueprint_inputs.min_elev | float(0) }}
+          - condition: template
+            value_template: >-
+              {% set already_on = expand(managed_lights) | selectattr('state', 'eq', 'on') | list | count > 0 %}
+              {% set lux_sensors = expand(blueprint_inputs.illuminance_sensors) | list %}
+              {% set ns = namespace(all_low = lux_sensors | count > 0) %}
+              {% for sensor in lux_sensors %}
+                {% if not is_number(sensor.state)
+                      or sensor.state | float(0)
+                      >= blueprint_inputs.max_lux | float(0) %}
+                  {% set ns.all_low = false %}
+                {% endif %}
+              {% endfor %}
+              {{ already_on or ns.all_low }}
+        sequence:
+          - variables:
+              elevation: "{{ state_attr('sun.sun', 'elevation') | float(0) }}"
+              min_elevation: "{{ blueprint_inputs.min_elev | float(0) }}"
+              max_elevation: "{{ blueprint_inputs.max_elev | float(0) }}"
+
+          - variables:
+              active_lights: >-
+                {% if elevation < min_elevation %}
+                  {{ blueprint_inputs.target_lights_below }}
+                {% elif elevation <= max_elevation %}
+                  {{ blueprint_inputs.target_lights_between }}
+                {% else %}
+                  {{ blueprint_inputs.target_lights_above }}
+                {% endif %}
+              brightness: >-
+                {% if elevation <= min_elevation %}
+                  {{ blueprint_inputs.min_bright | int(1) }}
+                {% elif elevation >= max_elevation %}
+                  {{ blueprint_inputs.max_bright | int(1) }}
+                {% else %}
+                  {% set factor = (elevation - min_elevation) / (max_elevation - min_elevation) %}
+                  {% set min_b = blueprint_inputs.min_bright | float(1) %}
+                  {% set max_b = blueprint_inputs.max_bright | float(1) %}
+                  {{ (min_b + factor * (max_b - min_b)) | round(0) | int }}
+                {% endif %}
+              color_temperature: >-
+                {% if elevation <= min_elevation %}
+                  {{ blueprint_inputs.min_kelvin | int(2200) }}
+                {% elif elevation >= max_elevation %}
+                  {{ blueprint_inputs.max_kelvin | int(3000) }}
+                {% else %}
+                  {% set factor = (elevation - min_elevation) / (max_elevation - min_elevation) %}
+                  {% set min_k = blueprint_inputs.min_kelvin | float(2200) %}
+                  {% set max_k = blueprint_inputs.max_kelvin | float(3000) %}
+                  {{ (min_k + factor * (max_k - min_k)) | round(0) | int }}
+                {% endif %}
+
+          - variables:
+              inactive_lights: >-
+                {{ managed_lights | reject('in', active_lights) | list }}
+
+          - if:
+              - condition: template
+                value_template: "{{ inactive_lights | count > 0 }}"
+            then:
+              - action: light.turn_off
+                target:
+                  entity_id: "{{ inactive_lights }}"
+                data:
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
+
+          - if:
+              - condition: template
+                value_template: "{{ active_lights | count > 0 }}"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: "{{ active_lights }}"
+                data:
+                  brightness_pct: "{{ brightness }}"
+                  color_temp_kelvin: "{{ color_temperature }}"
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
