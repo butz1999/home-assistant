@@ -7,11 +7,57 @@ blueprint:
     eine Lampengruppe ein. Die Ausschaltverzögerung beginnt erst, wenn alle
     Präsenzmelder frei sind. Helligkeit und Farbtemperatur werden beim
     Einschalten berechnet; eine laufende Nachführung nach Sonnenhöhe erfolgt
-    bewusst nicht.
+    bewusst nicht. Ein Dropdown-Helper mit den Optionen Aus, Ein und Auto
+    wählt den Betriebsmodus. Ein schaltet die manuell ausgewählten Lampen mit
+    festen Werten ein; Aus schaltet alle verwalteten Lampen aus. Beim Wechsel
+    auf Auto werden Präsenz und Helligkeit sofort ausgewertet.
   domain: automation
   homeassistant:
     min_version: 2024.10.0
   input:
+    operating_mode:
+      name: Betriebsmodus-Helper
+      description: >-
+        Dropdown-Helper mit den exakt geschriebenen Optionen Aus, Ein und Auto.
+        Präsenz und Lux-Sensoren steuern die Lampen nur im Modus Auto.
+      selector:
+        entity:
+          filter:
+            - domain: input_select
+
+    target_lights_manual:
+      name: Lampen für Ein / Aus
+      description: >-
+        Lampen für den manuellen Betrieb. Bei Ein werden alle anderen
+        Automatiklampen ausgeschaltet. Bei Aus werden diese Lampen und alle
+        Automatiklampen ausgeschaltet.
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: light
+          multiple: true
+
+    manual_brightness:
+      name: Helligkeit bei Ein
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
+    manual_kelvin:
+      name: Farbtemperatur bei Ein
+      default: 3000
+      selector:
+        number:
+          min: 2200
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+
     presence_sensors:
       name: Präsenzmelder
       description: >-
@@ -185,6 +231,10 @@ trigger_variables:
 
 variables:
   blueprint_inputs:
+    operating_mode: !input operating_mode
+    target_lights_manual: !input target_lights_manual
+    manual_brightness: !input manual_brightness
+    manual_kelvin: !input manual_kelvin
     presence_sensors: !input presence_sensors
     illuminance_sensors: !input illuminance_sensors
     max_lux: !input max_lux
@@ -200,6 +250,21 @@ variables:
     target_lights_above: !input target_lights_above
 
 triggers:
+  - trigger: state
+    entity_id: !input operating_mode
+    to: "Ein"
+    id: mode_on
+
+  - trigger: state
+    entity_id: !input operating_mode
+    to: "Aus"
+    id: mode_off
+
+  - trigger: state
+    entity_id: !input operating_mode
+    to: "Auto"
+    id: mode_auto
+
   - trigger: state
     entity_id: !input presence_sensors
     to: "on"
@@ -225,13 +290,76 @@ actions:
       managed_lights: >-
         {{ (blueprint_inputs.target_lights_below
             + blueprint_inputs.target_lights_between
-            + blueprint_inputs.target_lights_above) | unique | list }}
+            + blueprint_inputs.target_lights_above
+            + blueprint_inputs.target_lights_manual) | unique | list }}
 
   - choose:
-      # Alle Melder waren während der gesamten Verzögerung frei.
       - conditions:
           - condition: trigger
-            id: presence_cleared
+            id: mode_on
+          - condition: state
+            entity_id: !input operating_mode
+            state: "Ein"
+        sequence:
+          - variables:
+              inactive_lights: >-
+                {{ managed_lights | reject('in', blueprint_inputs.target_lights_manual) | list }}
+          - if:
+              - condition: template
+                value_template: "{{ inactive_lights | count > 0 }}"
+            then:
+              - action: light.turn_off
+                target:
+                  entity_id: "{{ inactive_lights }}"
+                data:
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
+          - if:
+              - condition: template
+                value_template: "{{ blueprint_inputs.target_lights_manual | count > 0 }}"
+            then:
+              - action: light.turn_on
+                target:
+                  entity_id: "{{ blueprint_inputs.target_lights_manual }}"
+                data:
+                  brightness_pct: "{{ blueprint_inputs.manual_brightness | int(100) }}"
+                  color_temp_kelvin: "{{ blueprint_inputs.manual_kelvin | int(3000) }}"
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
+
+      - conditions:
+          - condition: trigger
+            id: mode_off
+          - condition: state
+            entity_id: !input operating_mode
+            state: "Aus"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ managed_lights | count > 0 }}"
+            then:
+              - action: light.turn_off
+                target:
+                  entity_id: "{{ managed_lights }}"
+                data:
+                  transition: "{{ blueprint_inputs.transition_time | float(0) }}"
+
+      # Alle Melder waren während der gesamten Verzögerung frei.
+      # Bei Rückkehr zu Auto ohne Präsenz bleibt kein manuelles Licht an.
+      - conditions:
+          - condition: state
+            entity_id: !input operating_mode
+            state: "Auto"
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: presence_cleared
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: mode_auto
+                  - condition: template
+                    value_template: >-
+                      {% set sensors = expand(blueprint_inputs.presence_sensors) | list %}
+                      {{ sensors | count > 0 and sensors | rejectattr('state', 'eq', 'off') | list | count == 0 }}
         sequence:
           - if:
               - condition: template
@@ -245,10 +373,14 @@ actions:
 
       # Neue Präsenz oder der letzte Lux-Sensor fällt unter den Grenzwert.
       - conditions:
+          - condition: state
+            entity_id: !input operating_mode
+            state: "Auto"
           - condition: trigger
             id:
               - presence_detected
               - lux_became_low
+              - mode_auto
           - condition: template
             value_template: >-
               {{ expand(blueprint_inputs.presence_sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}
