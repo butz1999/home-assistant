@@ -57,6 +57,13 @@ light:
               duration: 300ms
 
 binary_sensor:
+  - platform: template
+    name: "Filterwarnung"
+    id: filterwarnung
+    device_class: problem
+    lambda: |-
+      return id(filter_aktiv);
+
   - platform: gpio
     pin:
       number: GPIO10
@@ -143,7 +150,6 @@ sensor:
           window_size: 10
           send_every: 10
           send_first_at: 1
-      - heartbeat: 60s
     on_value_range:
       - above: 2.0  # Schwellenwert anpassen!
         then:
@@ -191,25 +197,6 @@ switch:
     restore_mode: ALWAYS_OFF
     interlock: [lueftung_stufe_1, lueftung_stufe_2]
     interlock_wait_time: 50ms
-
-  - platform: template
-    name: "Filterwarnung"
-    id: filterwarnung_schalter
-    # Der Schalter zeigt den aktuellen Zustand der globalen Variable an
-    lambda: |-
-      return id(filter_aktiv);
-    turn_on_action:
-      - lambda: |-
-          id(filter_aktiv) = true;
-          id(luefter).publish_state();
-      # Blinken starten
-      - light.turn_on:
-          id: status_led
-          effect: "Blinken"
-    turn_off_action:
-      - lambda: |-
-          id(filter_aktiv) = false;
-          id(luefter).publish_state(); 
 
 fan:
   - platform: template
