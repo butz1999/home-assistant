@@ -8,7 +8,7 @@ esphome:
       - delay: 1s
       - fan.turn_on: 
           id: luefter
-          speed: 1
+          speed: 2
 
 esp32:
   variant: esp32s3
@@ -55,17 +55,6 @@ light:
               duration: 300ms
             - state: false
               duration: 300ms
-
-output:
-  - platform: gpio
-    pin: GPIO5
-    id: output_stufe_1
-  - platform: gpio
-    pin: GPIO6
-    id: output_stufe_2
-  - platform: gpio
-    pin: GPIO7
-    id: output_stufe_3
 
 binary_sensor:
   - platform: gpio
@@ -175,20 +164,33 @@ sensor:
               id(luefter).publish_state(); 
 
 switch:
-  - platform: output
+  # Gegenseitige Verriegelung mit 50 ms Pause beim Stufenwechsel.
+  - platform: gpio
     name: "Stufe 1"
-    output: output_stufe_1
+    pin: GPIO5
     id: lueftung_stufe_1
+    internal: true
+    restore_mode: ALWAYS_OFF
+    interlock: [lueftung_stufe_2, lueftung_stufe_3]
+    interlock_wait_time: 50ms
 
-  - platform: output
+  - platform: gpio
     name: "Stufe 2"
-    output: output_stufe_2
+    pin: GPIO6
     id: lueftung_stufe_2
+    internal: true
+    restore_mode: ALWAYS_OFF
+    interlock: [lueftung_stufe_1, lueftung_stufe_3]
+    interlock_wait_time: 50ms
 
-  - platform: output
+  - platform: gpio
     name: "Stufe 3"
-    output: output_stufe_3
+    pin: GPIO7
     id: lueftung_stufe_3
+    internal: true
+    restore_mode: ALWAYS_OFF
+    interlock: [lueftung_stufe_1, lueftung_stufe_2]
+    interlock_wait_time: 50ms
 
   - platform: template
     name: "Filterwarnung"
@@ -218,9 +220,7 @@ fan:
 
     on_state:
       - lambda: |-
-          id(lueftung_stufe_1).turn_off();
-          id(lueftung_stufe_2).turn_off();
-          id(lueftung_stufe_3).turn_off();
+          // Beim Stufenwechsel schaltet der Interlock die bisherige Stufe ab.
           auto rgbLED = id(status_led).turn_on();
           if (!id(filter_aktiv))
           {
@@ -261,6 +261,9 @@ fan:
           }
           else
           {
+            id(lueftung_stufe_1).turn_off();
+            id(lueftung_stufe_2).turn_off();
+            id(lueftung_stufe_3).turn_off();
             if (!id(filter_aktiv))
             {
               rgbLED.set_effect("None");
