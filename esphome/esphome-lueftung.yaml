@@ -39,7 +39,7 @@ light:
   - platform: esp32_rmt_led_strip
     id: status_led
     chipset: ws2812
-    rgb_order: RGB
+    channel_colors: RGB
     pin: GPIO38
     num_leds: 1
     name: "Status NeoPixel"
@@ -207,6 +207,13 @@ fan:
 
     on_state:
       - lambda: |-
+          // Ausgeschaltet auch 0 % melden; die Abfrage verhindert eine Endlosschleife.
+          if (!id(luefter).state && id(luefter).speed != 0)
+          {
+            id(luefter).speed = 0;
+            id(luefter).publish_state();
+            return;
+          }
           // Beim Stufenwechsel schaltet der Interlock die bisherige Stufe ab.
           auto rgbLED = id(status_led).turn_on();
           if (!id(filter_aktiv))
